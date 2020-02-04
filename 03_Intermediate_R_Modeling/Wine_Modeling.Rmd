@@ -1,0 +1,645 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+# Libraries
+```{r}
+library(dplyr) #data manipulation
+library(tidyr) #data manipulation
+library(psych) #descriptive statistics
+library(Hmisc) #descriptive statistics
+
+library(purrr)
+library(tidyverse)
+library(purrrlyr) #data type convertor
+
+library(kableExtra)
+library(xtable)
+
+library(ggpubr) #multi plot
+library(grid) #multi plot
+
+library(caret) #machine learning
+```
+
+# Loading Data Into Environment
+```{r}
+winequality_white <- read_csv("Data/winequality-white.csv")
+```
+
+# Data Set Overview
+```{r}
+#You can as well use glimpse(), str() or summary() function
+#The one below is a custom made one
+
+head(winequality_white) %>%
+  knitr::kable() %>%
+    kable_styling(full_width = F, position = "left") %>%
+    row_spec(0, color = "white", background = "#6897BB")
+```
+
+# Data Formating
+```{r}
+winequality_white <- winequality_white %>%
+  select(quality, everything())
+
+oldnames = c("fixed acidity","volatile acidity", "residual sugar", 
+"free sulfur dioxide", "total sulfur dioxide", "citric acid")
+newnames = c("fixedAcidity","volatileAcidity", "residualSugar", 
+"freeSulfurdioxide", "totalSulfurDioxide", "citricAcid")
+
+winequality_white <-winequality_white %>% 
+  rename_at(vars(oldnames), ~ newnames) %>%
+  mutate(quality = as.factor(ifelse(quality < 6, "low", "high")))
+
+#You can do the same thing with the code below
+colnames(winequality_white ) <- gsub(" ", "_", colnames(winequality_white ))
+```
+
+
+# Data Type Check Up
+```{r}
+#Select data types
+data_types <- sapply(winequality_white, class)
+data_types <- data.frame(feature = names(data_types), values = data_types, row.names = NULL)
+
+#transpose the training set
+values <- t(winequality_white)
+
+#select the new transposed matrix and convert it to data frame class
+datamatrix = as.data.frame(values, stringsAsFactors = FALSE)
+
+#bind both data frames 
+structure_df <- bind_cols(data_types, datamatrix)
+
+#select only three columns 
+structure_dfa <- structure_df[,1:3]
+
+structure_dfa %>%
+  knitr::kable() %>%
+  kable_styling(full_width = F, position = "left") %>%
+  row_spec(0, color = "white", background = "#6897BB", align = "center")
+```
+
+```{r}
+winequality_white <- winequality_white %>%
+  mutate_if(sapply(winequality_white, is.integer), as.factor)
+```
+
+```{r}
+#the problem could be also solved like this:
+#list the feature or features for which you would like to change data type
+col <- c("quality")
+
+#then use purrr's function dmap to change the data type of the feature
+winequality_white[, col] <- winequality_white %>%
+  select(one_of(col)) %>%
+  dmap(as.factor)
+```
+
+# NAs Check
+```{r}
+#Sometimes values can be NA, but recorded under some other value. 
+#Here are some of the potential NAs:
+winequality_white[winequality_white == c("?", ".", ",", "!", "na")] <- NA
+
+na <- winequality_white %>%
+  map_df(function(x) {
+    sum(is.na(x))
+  }) %>%
+  gather(Features, NA_values) %>%
+  arrange(desc(NA_values)) %>%
+  print(n = 15)
+```
+```{r}
+na %>%
+  knitr::kable() %>%
+      kable_styling(full_width = F, position = "left") %>%
+      row_spec(0, color = "white", background = "#6897BB")
+```
+
+# Spliting The Data
+
+```{r}
+set.seed(92)
+trainIndex <- createDataPartition(winequality_white$quality, 
+                                  p = .7,
+                                  list = FALSE,
+                                  times = 1)
+
+train <- winequality_white[ trainIndex,]
+test <- winequality_white[-trainIndex,]
+```
+
+# Visualize The Stratified Split
+
+```{r}
+rbind(data.frame(group = "train", train),
+      data.frame(group = "test", test)) %>%
+  gather(x, y, quality:sulphates) %>%
+  ggplot(aes(x = y, color = group, fill = group)) +
+    geom_density(alpha = 0.3) +
+    facet_wrap( ~ x, scales = "free", ncol = 3)
+```
+
+```{r}
+Hmisc::describe(train$quality)
+```
+
+```{r}
+Hmisc::describe(test$quality)
+```
+
+# Exploratory Data Analysis
+Descriptive Statistics
+Numerical Data Type
+
+```{r}
+df_num <- train %>%
+  select(-quality) %>%
+  summarise_all(funs(min = min, 
+                      Q25 = quantile(., 0.25), 
+                      median = median, 
+                      Q75 = quantile(., 0.75), 
+                      max = max,
+                      mean = mean, 
+                      sd = sd,
+                      skewness = skew,
+                      kurtosis = kurtosi))
+
+# reshape it using tidyr functions
+summary_num_stat <- df_num %>% 
+  gather(stat, val) %>%
+  separate(stat, into = c("features", "stat"), sep = "_") %>%
+  spread(stat, val) %>%
+  select(features, min, Q25, Q75, max, median, mean, sd, skewness, kurtosis)
+
+summary_num_stat %>%
+  knitr::kable() %>%
+    kable_styling(full_width = F, position = "left") %>%
+    row_spec(0, color = "white", background = "#6897BB", align = "right")
+```
+
+# Categorical Data Type
+```{r}
+quality <- train %>%
+  group_by(category) %>%
+  summarise (n = n()) %>%
+  mutate(freq = n / sum(n))
+
+quality %>%
+  knitr::kable() %>%
+    kable_styling(full_width = F, position = "left") %>%
+    row_spec(0, color = "white", background = "#6897BB", align = "right")
+```
+
+# Univariate and Bivariate Relationships and Associations
+Categorical Variables
+```{r}
+ggplot(data = train, aes(x = category)) +
+   geom_bar(color = 'black', fill = "#6897BB") +
+   geom_text(stat='count', aes(label=..count..), vjust=3, size=5, color = "white") +
+   #theme(axis.text.x = element_text(angle=65, vjust=0.6)) +
+   guides(fill=FALSE) +
+   xlab("quality") + ylab("Count") +
+   labs(title="Count per category for 'quality' feature", 
+   #subtitle="Count of All Positive and Negative Samples", 
+   caption="Source: winequality_white")
+```
+
+Continuous Variables
+
+```{r}
+train %>%
+  gather(-quality, key = "var", value = "value") %>% 
+  ggplot(aes(x = value, fill = as.factor(quality))) +
+  geom_histogram(color = "white", bins = 30, alpha = 0.6) +
+  facet_wrap(~ var, scales = "free") +
+  ylab("Frequency") +
+  xlab("All Continuous Features") +
+  labs(title = "The distribution of low and high quality wine",
+       subtitle = "Average") +
+  #scale_fill_brewer(name = "New Legend Title") +
+  scale_fill_manual(values = c("#ff1919", "#0e2b58"), name = "Quality") +
+  theme(text = element_text(color = "gray20"),
+        legend.position = c("right"), # position the legend in the upper left 
+        legend.direction = "vertical",
+        legend.justification = 0.1, # anchor point for legend.position.
+        legend.text = element_text(size = 11, color = "gray10"),
+        axis.text = element_text(face = "italic"),
+        axis.ticks.y = element_blank(), # element_blank() is how we remove elements
+        axis.line.y = element_blank(),
+        panel.grid.major = element_line(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+train %>%
+  gather(-quality, key = "var", value = "value") %>% 
+  ggplot(aes(x = value, y= value, fill = as.factor(quality))) +
+  geom_boxplot() +
+  #scale_y_log10() +
+  #scale_x_log10() +
+  facet_wrap(~ var, scales = "free") +
+  ylab("Feature") +
+  xlab("Feature") +
+  labs(title = "'Box Plot per Quality'") +
+  #scale_fill_manual(name = "Boxplot", palette = "Paired") +
+  scale_fill_manual(values = c("#ff1919", "#0e2b58"), name = "Quality") +
+  theme(text = element_text(color = "gray20"),
+        legend.position = c("right"), # position the legend in the upper left 
+        legend.direction = "vertical",
+        legend.justification = 0.1, # anchor point for legend.position.
+        legend.text = element_text(size = 11, color = "gray10"),
+        axis.text.x=element_blank(), #hides x axis
+        axis.text = element_text(face = "italic"),
+        axis.ticks.y = element_blank(), # element_blank() is how we remove elements
+        axis.line.y = element_blank(),
+        panel.grid.major = element_line(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+train %>%
+  gather(-quality, key = "var", value = "value") %>% 
+  ggplot(aes(x = value, y= value, fill = as.factor(quality))) +
+  geom_violin(alpha = 0.6) +
+  #scale_y_log10() +
+  #scale_x_log10() +
+  facet_wrap(~ var, scales = "free") +
+  ylab("Features") +
+  xlab("Features") +
+  labs(title = "'Violin Plot per Quality'") +
+  #scale_fill_brewer(name = "Boxplot", palette = "Paired")
+  #scale_fill_manual(name = "Boxplot", palette = "Paired") +
+  scale_fill_manual(values = c("#ff1919", "#0e2b58"), name = "Quality") +
+  theme(text = element_text(color = "gray20"),
+        legend.position = c("right"), # position the legend in the upper left 
+        legend.direction = "vertical",
+        legend.justification = 0.1, # anchor point for legend.position.
+        legend.text = element_text(size = 11, color = "gray10"),
+        axis.text = element_text(face = "italic"),
+        axis.ticks.y = element_blank(), # element_blank() is how we remove elements
+        axis.line.y = element_blank(),
+        panel.grid.major = element_line(),
+        panel.grid.major.x = element_blank())
+```
+
+```{r}
+train %>%
+  gather(-quality, -alcohol, key = "var", value = "value") %>% 
+  ggplot(aes(x = value, y = alcohol, color = quality)) +
+  geom_point(alpha = 0.25) +
+    scale_color_manual(name = "",
+                     values = c("#ff1919", "#0e2b58")) +
+  facet_wrap(~ var, scales = "free") + 
+  labs(title = "Scatterplot") +
+  theme(text = element_text(size=9, family = "Georgia"),
+        axis.ticks = element_blank(),
+        plot.title = element_text(size = 15, margin = margin(b = 8)),
+        plot.subtitle = element_text(size = 10, color = "darkslategrey", margin = margin(b = 20)),
+        plot.caption = element_text(size = 6, margin = margin(t = 8), color = "grey70", hjust = 0),
+        strip.text = element_text(size = 10, face="bold"))
+```
+
+
+```{r}
+class_comparison <- train %>%
+  #Creating new feature by breaking alcohol into 2 levels 
+  mutate(category=cut(alcohol, breaks=c(-Inf, 10, Inf), labels=c("low_alcohol", "high_alcohol"))) %>%
+  select(quality, category, alcohol) 
+
+#being more explicit in regards to what is meant by low and high
+levels(class_comparison$quality) <- c('high_quality', 'low_quality')
+
+#Calculating mean for each category
+class_mean <- class_comparison %>%
+  group_by(quality, category) %>%
+  summarise(Mean = mean(alcohol))
+
+#Creaating label and rounding it to max 3 decimals. 
+class_mean <- class_mean %>%
+  mutate(Label = paste0(round(Mean, 3)))
+
+#Histogram Plot
+ggplot(class_comparison, aes(x = alcohol, fill = as.factor(category))) +
+  geom_histogram(bins = 30, color = "white") +
+  scale_fill_manual(values=c("#F8766D", "#6897BB")) +
+  geom_vline(data = class_mean, aes(xintercept = Mean), linetype = "dashed", alpha = .6) +
+  facet_grid(quality ~ category, scales = "free") +
+  scale_y_continuous(breaks=pretty_breaks(n=2), limits = c(0, 150)) +
+  ylab("Frequency") +
+  xlab("Alcohol") +
+  labs(title = "Mean Alcohol value devided by Quality & Alcohol - low/high levels") +
+  #subtitle = "The higher the level of wine, the greater is chance that it is considered high quality") +
+  geom_text(data = class_mean, aes(x = Mean, y = 130, id = quality, label = Label),
+            family = "Georgia", size = 3, hjust = -.1) +
+  theme(text = element_text(size=9, family = "Georgia"),
+        legend.position='none',
+        axis.ticks = element_blank(),
+        plot.title = element_text(size = 15, margin = margin(b = 8)),
+        plot.subtitle = element_text(size = 10, color = "darkslategrey", margin = margin(b = 20)),
+        plot.caption = element_text(size = 6, margin = margin(t = 8), color = "grey70", hjust = 0),
+        strip.text = element_text(size = 10, face="bold"))
+```
+
+Correlation Matrix
+```{r}
+#First thing change the data type from character to integer, so that cor function can work
+train_a <- train %>%
+  mutate_if(sapply(train, is.factor), as.integer)
+
+train_a$quality <- ifelse(train_a$quality == 2, 0, train_a$quality) 
+
+#implement cor function
+M <- cor(train_a)
+#head(round(M,2))
+
+# mat : is a matrix of data
+# ... : further arguments to pass to the native R cor.test function
+cor.mtest <- function(mat, ...) {
+  mat <- as.matrix(mat)
+  n <- ncol(mat)
+  p.mat<- matrix(NA, n, n)
+  diag(p.mat) <- 0
+  for (i in 1:(n - 1)) {
+    for (j in (i + 1):n) {
+      tmp <- cor.test(mat[, i], mat[, j], ...)
+      p.mat[i, j] <- p.mat[j, i] <- tmp$p.value
+    }
+  }
+  colnames(p.mat) <- rownames(p.mat) <- colnames(mat)
+  p.mat
+}
+# matrix of the p-value of the correlation
+p.mat <- cor.mtest(train_a)
+
+#Correlation plot
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot(M, method="color", col=col(200),  
+         type="upper", order="hclust", 
+         tl.cex = 0.75, 
+         number.cex = .55,
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+         # Combine with significance
+         p.mat = p.mat, sig.level = 0.01, insig = "blank", 
+         # hide correlation coefficient on the principal diagonal
+         diag=FALSE)
+```
+
+```{r}
+res2 <- rcorr(as.matrix(train))
+cor_sig <- as.data.frame(res2$P)
+
+cor_sig[is.na(cor_sig)] <- 0
+
+cor_sig[,1:12] <- round(cor_sig, digits = 3)
+
+cor_sig <- cor_sig %>% 
+  mutate(
+  features = row.names(.),
+  quality = cell_spec(quality, color = ifelse(quality > 0.05, "red", "black")),
+  fixedAcidity = cell_spec(fixedAcidity, color = ifelse(fixedAcidity > 0.05, "red", "black")),
+  volatileAcidity = cell_spec(volatileAcidity, 
+color = ifelse(volatileAcidity > 0.05, "red", "black")),
+  citricAcid = cell_spec(citricAcid, color = ifelse(citricAcid > 0.05, "red", "black")),
+  residualSugar = cell_spec(residualSugar, color = ifelse(residualSugar > 0.05, "red", "black")),
+  chlorides = cell_spec(chlorides, color = ifelse(chlorides > 0.05, "red", "black")),
+  freeSulfurdioxide = cell_spec(freeSulfurdioxide, 
+color = ifelse(freeSulfurdioxide > 0.05, "red", "black")),
+  totalSulfurDioxide = cell_spec(totalSulfurDioxide, 
+color = ifelse(totalSulfurDioxide > 0.05, "red", "black")),
+  density = cell_spec(density, color = ifelse(density > 0.05, "red", "black")),
+  pH = cell_spec(pH, color = ifelse(pH > 0.05, "red", "black")),
+  sulphates = cell_spec(sulphates, color = ifelse(sulphates > 0.05, "red", "black")),
+  alcohol = cell_spec(alcohol, color = ifelse(alcohol > 0.05, "red", "black")))
+
+
+cor_sig %>%
+  #select_all() %>%
+  kable(escape = F) %>%
+  kable_styling("striped", full_width = F) %>%
+  kable_styling(bootstrap_options = "striped", full_width = F, position = "float_right") %>%
+  row_spec(0, color = "white", background = "#6897BB", align = "center")
+```
+
+Feature Engineering
+
+```{r}
+trainFE <- train %>%
+  mutate(
+    
+    #Isolation features
+    chloridesHIGH = chlorides < 0.06,
+    citricAcidBETWEEM = citricAcid < 0.5 & citricAcid > 0.1,
+    freeSulfurdioxideHIGH = freeSulfurdioxide > 65,
+    pHHIGH = pH > 3.40,
+    residualSugarHIGH = residualSugar > 14,
+    sulphatesHIGH = sulphates > 0.6,
+    volatileAcidityHIGH = volatileAcidity > 0.45,
+    sulphatesHIGH = sulphates > 0.6,
+    fixedAcidityLOW = fixedAcidity < 6,
+    alcoholLOW = alcohol < 9,
+    alcoholHIGH = alcohol > 12.5,
+    
+    #Interaction features
+    chloridesAL = chlorides * alcohol,
+    fixedAcidityAL = fixedAcidity * alcohol,
+    volatileAcidityAL = volatileAcidity * alcohol,
+    citricAcidAL = citricAcid * alcohol,
+    residualSugarAL = residualSugar * alcohol,
+    chloridesAL = chlorides * alcohol, 
+    freeSulfurdioxideAL = freeSulfurdioxide * alcohol,
+    totalSulfurDioxideAL = totalSulfurDioxide * alcohol,
+    densityAL = density * alcohol,
+    pHAL = pH * alcohol
+  )
+```
+
+
+```{r}
+col <- c("chloridesHIGH", "citricAcidBETWEEM", "freeSulfurdioxideHIGH", "pHHIGH", 
+"residualSugarHIGH", "sulphatesHIGH", "volatileAcidityHIGH", "fixedAcidityLOW", 
+"alcoholLOW", "alcoholHIGH")
+
+#take columns from col object and transform it from logical data type to a factor
+trainFE[, col] <- trainFE %>%
+  select(one_of(col)) %>%
+  dmap(as.factor)
+
+head(x) %>%
+  knitr::kable() %>%
+    kable_styling(full_width = F, position = "left") %>%
+    row_spec(0, color = "white", background = "#6897BB", align = "right")
+```
+
+Modeling
+
+```{r}
+trControl = trainControl(method = "repeatedcv", 
+                         number = 5, 
+                         repeats = 5, 
+                         savePredictions = TRUE, 
+                         verboseIter = FALSE)
+```
+
+```{r}
+set.seed(92)
+model_lm <- caret::train(quality ~ .,
+                         data = train,
+                         method = "lm",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+model_lmFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "lm",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+model_glm <- caret::train(quality ~ .,
+                         data = train,
+                         method = "glm",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+model_glmFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "glm",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+
+library(elasticnet)
+model_lasso <- caret::train(quality ~ .,
+                         data = train,
+                         method = "lasso",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+library(elasticnet)
+model_lassoFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "lasso",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+model_ridge <- caret::train(quality ~ .,
+                         data = train,
+                         method = "ridge",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+model_ridgeFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "ridge",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+library(glmnet)
+model_glmnet <- caret::train(quality ~ .,
+                         data = train,
+                         method = "glmnet",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+
+
+library(glmnet)
+model_glmnetFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "glmnet",
+                         preProcess = c("BoxCox","scale", "center"),
+                         trControl = trControl)
+
+model_rf <- caret::train(quality ~ .,
+                         data = train,
+                         method = "rf",
+                         preProcess = c("scale", "center"),
+                         trControl = trControl)
+
+model_rfFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "rf",
+                         preProcess = c("scale", "center"),
+                         trControl = trControl)
+
+set.seed(92)
+model_Cart <- caret::train(quality ~ .,
+                         data = train,
+                         method = "rpart",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+model_CartFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "rpart",
+                         preProcess = c("BoxCox", "scale", "center"),
+                         trControl = trControl)
+
+model_knn <- caret::train(quality ~ .,
+                         data = train,
+                         method = "knn",
+                         preProcess = c("scale", "center"),
+                         trControl = trControl)
+
+model_knnFE <- caret::train(quality ~ .,
+                         data = trainFE,
+                         method = "knn",
+                         preProcess = c("scale", "center"),
+                         trControl = trControl)
+```
+
+
+```{r}
+# Compare model performances using resample()
+models_compare <- resamples(list(LM = model_lm, LM_FE = model_lmFE, 
+                                 GLM = model_glm, GLM_FE = model_glmFE,
+                                 Lasso = model_lasso, LassoFE = model_lassoFE, 
+                                 Ridge = model_ridge, RidgeFE = model_ridgeFE, 
+                                 Elastic_Net = model_glmnet, Elastic_NetFE = model_glmnetFE,
+                                 RF = model_rf, RFFE = model_rfFE,
+                                 CART = model_Cart, CARTFE = model_CartFE, 
+                                 KNN = model_knn, KNNFE = model_knnFE))
+
+# Summary of the models performances
+summary(models_compare)
+```
+
+```{r}
+dotplot(models_compare)
+```
+
+```{r}
+bwplot(models_compare)
+```
+
+```{r}
+# dot plots of accuracy
+scales <- list(x=list(relation="free"), y=list(relation="free"))
+dotplot(models_compare, scales=scales)
+```
+
+```{r}
+parallelplot(models_compare)
+```
+
+```{r}
+xyplot(models_compare, models=c("RF", "RFFE"))
+```
+
+```{r}
+varimp_mars <- varImp(model_glmnet)
+plot(varimp_mars, main="Variable Importance with RF")
+```
+
+
+
+
+
+
+
+
